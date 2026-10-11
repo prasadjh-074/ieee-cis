@@ -1,0 +1,16 @@
+xConcepts
+
+Class imbalance in fraud detection — your dataset is 3.5% fraud, 96.5% legit, which is why accuracy is a useless metric here and you'll need class weighting or resampling later
+How to read missingness patterns — noticing that dist2, D6-D9, D12-D14 and a cluster of V features are 85-94% missing, which flags them as candidates to drop or handle specially, not fix blindly
+Dataset structure — 394 features, mostly anonymized float columns (V1-339), a handful of categoricals, and what the C, D, M column groups roughly represent
+
+Practical/tooling
+
+Setting up a Python venv (python3 -m venv venv, activating it)
+Debugging pandas.errors.EmptyDataError — learned that means an empty/corrupted file, not a code bug
+Navigating folder structure issues in the terminal (cd, pwd, ls) — genuinely useful, this trips up a lot of people early on
+Loading large CSVs with pandas and doing first-pass EDA checks (.shape, value_counts, isnull().mean(), .dtypes)
+
+Honestly the folder/venv/download debugging ate more of today than the actual ML, but that's normal for Day 1 — every real project starts with this kind of friction, and now you won't get stuck on it again.
+
+Log line for today: "Day 1 — environment setup + data loaded. Fraud rate 3.5%, high missingness in D-series/V-cluster, 394 features (376 float, 14 categorical). Setup: venv, pandas, verified data integrity issues from failed downloads."
