@@ -1,93 +1,128 @@
-# sampleproj1
+# Adversarial-Robust Fraud Detection
 
+A fraud detection model built on the IEEE-CIS dataset, evaluated not just on accuracy
+but on how well it holds up against a fraudster actively trying to evade it.
 
+Most student fraud-detection projects stop at "here's my F1 score." This one goes
+further: it identifies *why* the model fails where it fails, tries to fix it, and
+honestly reports where the fix worked and where it didn't.
 
-## Getting started
+## Dataset
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+IEEE-CIS Fraud Detection (Kaggle), 354,324 transactions, 3.5% fraud rate.
+Two tables: `train_transaction.csv` (394 features) and `train_identity.csv`
+(41 features, covering ~24% of transactions), merged on `TransactionID`.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## 1. Exploratory Data Analysis
 
-## Add your files
+Key findings that shaped feature selection:
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+- **Time of day**: fraud rate peaks at hour 7 (~10.5%) vs a ~3.5% baseline —
+  the strongest single pattern found in the raw data.
+- **ProductCD**: category `C` has an 11.8% fraud rate vs 2.0% for the majority
+  category `W` — a ~6x gap.
+- **Card type**: credit cards show 2.7x the fraud rate of debit cards.
+- **Identity data presence**: transactions with identity/device data attached have
+  **4x** the fraud rate of those without (8.0% vs 2.1%) — likely because identity
+  verification is triggered more often on suspicious transactions.
+- **Device fingerprinting**: specific Android device-model strings (not generic
+  OS labels) repeat disproportionately across fraud transactions — a device-farm
+  signature.
+- **V257** (one of 339 anonymized Vesta features): 100% missing for
+  `ProductCD='W'`, present for other categories. Its *value*, not just its
+  presence, carries fraud signal independent of ProductCD — confirmed later via
+  model feature importance.
 
-```
-cd existing_repo
-git remote add origin https://gitlab.com/aittraining/ait/sampleproj1.git
-git branch -M main
-git push -uf origin main
-```
+## 2. Baseline Model
 
-## Integrate with your tools
+XGBoost classifier, 11 engineered features (22 after one-hot encoding),
+`scale_pos_weight` to handle the 96.5/3.5 class imbalance.
 
-* [Set up project integrations](https://gitlab.com/aittraining/ait/sampleproj1/-/settings/integrations)
+| Metric | Value |
+|---|---|
+| ROC-AUC | 0.837 |
+| PR-AUC | 0.413 |
 
-## Collaborate with your team
+## 3. Connectivity Features (Phase 2)
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+Added graph-inspired features without a full graph library: shared-identifier
+frequency counts (`card1_count`, `addr1_count`, `device_count`) and a
+`risky_device_flag` built **only from training data** (to avoid leakage) that
+flags device strings appearing frequently among fraud cases.
 
-## Test and Deploy
+| Metric | Before | After |
+|---|---|---|
+| PR-AUC | 0.413 | **0.475** (+15%) |
+| ROC-AUC | 0.837 | **0.880** |
 
-Use the built-in continuous integration in GitLab.
+## 4. Adversarial Red-Teaming (the differentiator)
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+Simulated a realistic fraudster: shrink the transaction amount, shift to an
+off-peak hour — the two levers an attacker actually controls.
 
-***
+**Aggregate result**: 23.4% of previously-caught fraud evades detection under
+this attack.
 
-# Editing this README
+**Deeper finding**: this vulnerability is not uniform.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+| Group | Evasion rate |
+|---|---|
+| High-confidence catches (n=914) | 10.2% |
+| Low-confidence catches (n=239) | **74.1%** |
 
-## Suggestions for a good README
+Root cause, confirmed by comparing feature values between groups: vulnerability
+concentrates in fraud cases with a **weak `V257` signal** (median = 1). High-`V257`
+fraud (median = 3–4) sits deep in "confident fraud" territory and is robust.
+Low-`V257` fraud sits near the decision boundary and is easily nudged across it.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## 5. Hardening — Two Attempts, Honest Results
 
-## Name
-Choose a self-explaining name for your project.
+**Attempt 1**: adversarial training using one fixed perturbation
+(amount × 0.7, hour = 14) on the vulnerable subgroup.
+Evasion on that *same* pattern dropped to 1.3% — but on a genuinely new
+perturbation, evasion was 21.7% (hardened) vs 19.8% (original). **The model had
+memorized the specific attack, not learned general robustness.**
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+**Attempt 2**: adversarial training using a *randomized range* of perturbations
+(amount × 0.5–0.9, six different hours). Results:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+| Attack pattern | Original model | Hardened model |
+|---|---|---|
+| Within trained range | 23.4% | **3.3%** |
+| Outside trained range (untested hour) | 7.8% | 15.2% |
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+**Conclusion**: adversarial training generalizes *within* the perturbation
+space it was trained on, but does not extrapolate beyond it — a known,
+expected property of adversarial training, not an implementation bug. Full
+robustness would require covering the complete realistic attacker parameter
+space (all 24 hours, not a curated subset), not a narrow augmentation set.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+**Cost**: hardening reduced PR-AUC from 0.475 to 0.360 — a real
+precision-for-robustness tradeoff, not a free win.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## 6. Explainability
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+SHAP values confirm and refine the feature-importance story: `TransactionAmt`
+has the largest aggregate impact, while `V257` shows a distinctive pattern —
+near-zero impact for most transactions but a long tail of strongly positive
+impact when its value is high, consistent with the red-teaming findings above.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## 7. Dashboard
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+An interactive Streamlit app (`dashboard.py`) with four views: model
+performance, feature importance, the adversarial red-teaming story, and a
+live "test a transaction" tool.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## What I'd Do With More Time
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+- Full graph-based features (community detection for mule rings) instead of
+  the simplified connectivity-count approximation used here
+- Cover the full attacker parameter space during adversarial training rather
+  than a curated subset
+- An ensemble/second-stage model specifically for borderline (low-confidence)
+  cases, since that's where the real vulnerability lives
+- LLM-based document/transaction narrative analysis as a complementary signal
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+## Stack
 
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Python, pandas, XGBoost, scikit-learn, SHAP, Streamlit, matplotlib
